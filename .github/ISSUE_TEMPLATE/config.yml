@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 先看看 README
+    url: https://github.com/hencter/chishenme-3d#readme
+    about: 玩法、技术实现、怎么跑起来、怎么参与，README 里都写了
