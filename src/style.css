@@ -862,9 +862,19 @@ body {
 }
 
 @keyframes pop {
-  0% { opacity: 0; transform: translateY(28px) scale(0.9); }
-  60% { transform: translateY(-4px) scale(1.015); }
-  100% { opacity: 1; transform: none; }
+  /* 同理：起始态要看得见、点得着，动画没跑起来也不会变成一张隐形卡片 */
+  0% {
+    opacity: 0.35;
+    transform: translateY(26px) scale(0.94);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .result-card::before {
@@ -1577,19 +1587,39 @@ kbd {
     bottom: 0;
     width: auto;
     max-height: 94vh;
-    padding: 22px 16px calc(16px + env(safe-area-inset-bottom));
+    padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
     border-radius: 22px 22px 0 0;
     animation: sheetUp 0.42s var(--ease);
+  }
+
+  /* 标题压缩一点，让「菜名」尽量落在折叠线以上 */
+  .sheet-card h2 {
+    font-size: 18px;
+  }
+
+  .sheet-sub {
+    margin-bottom: 12px;
+    font-size: 11.5px;
   }
 
   .add-photo {
     flex-direction: column;
     gap: 10px;
+    margin-bottom: 14px;
   }
 
   .photo-drop {
     width: 100%;
-    min-height: 180px;
+    min-height: 128px;
+  }
+
+  .photo-hint {
+    padding: 12px;
+    gap: 4px;
+  }
+
+  .photo-hint .cam {
+    font-size: 24px;
   }
 
   .photo-side {
@@ -1621,9 +1651,14 @@ kbd {
 }
 
 @keyframes sheetUp {
+  /*
+   * 重要：入场动画的「起始态」也必须是可见、可用的。
+   * 之前写成 translateY(100%)，一旦动画因为主线程卡顿没推进，
+   * 整个加菜表单会被推到屏幕外面 —— 用户看到的就是「点了没反应」。
+   */
   from {
-    transform: translateY(100%);
-    opacity: 0.6;
+    transform: translateY(72px);
+    opacity: 0.35;
   }
   to {
     transform: none;

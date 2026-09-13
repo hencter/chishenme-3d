@@ -564,6 +564,11 @@ export function createHud({ store, actions }) {
         meta: `${res.width}×${res.height} · ${Math.max(1, Math.round(res.blob.size / 1024))} KB · 主题色 ${hexCss(res.accent)}`,
       });
       addTip('照片处理好了，起个菜名就能加进菜单');
+      // 手机上拍完照，把表单滚进视野并聚焦菜名，省得用户自己找
+      requestAnimationFrame(() => {
+        el.fldName?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.fldName?.focus({ preventScroll: true });
+      });
     } catch (err) {
       console.error('[add] 照片处理失败', err);
       addTip('这张图读不出来，换一张试试', true);
