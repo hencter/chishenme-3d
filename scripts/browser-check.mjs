@@ -592,6 +592,151 @@ try {
   ok(persisted.textureIsPlaceholder === false, '恢复的是真照片而不是占位卡');
   ok(persisted.total === 19, '刷新后总数是 19 道', String(persisted.total));
 
+  /* ---------------- 编辑已有自定义菜 ---------------- */
+
+  await page.evaluate(() => {
+    document.querySelector('#dishList .edit-btn')?.click();
+  });
+  await page.waitForFunction(() => document.getElementById('addModal')?.hidden === false, {
+    timeout: 15000,
+    polling: 100,
+  });
+  await page.waitForFunction(() => document.getElementById('photoPreview')?.hidden === false, {
+    timeout: 15000,
+    polling: 150,
+  });
+  const editOpen = await page.evaluate(() => ({
+    title: document.getElementById('addTitle')?.textContent?.trim(),
+    name: document.getElementById('fldName')?.value,
+    kcal: document.getElementById('fldKcal')?.value,
+    save: document.getElementById('btnAddSave')?.textContent?.trim(),
+    photoVisible: document.getElementById('photoPreview')?.hidden === false,
+  }));
+  ok(editOpen.title === '改一改这道菜', '点 ✏️ 进入编辑模式', editOpen.title);
+  ok(editOpen.name === '测试红烧肉' && editOpen.kcal === '680', '编辑表单预填了原值', `${editOpen.name}/${editOpen.kcal}`);
+  ok(editOpen.save === '保存修改', '保存按钮变成「保存修改」');
+  ok(editOpen.photoVisible === true, '编辑时能读回原来的照片');
+
+  await page.evaluate(() => {
+    document.getElementById('fldKcal').value = '700';
+    document.getElementById('btnAddSave').click();
+  });
+  await page.waitForFunction(() => document.getElementById('addModal')?.hidden === true, {
+    timeout: 30000,
+    polling: 100,
+  });
+  await sleep(1200);
+  const edited = await page.evaluate(() => {
+    const app = globalThis.__chishenme;
+    const dish = app.store.customDishes[0];
+    const pod = app.ring.pods.find((p) => p.dish.id === dish?.id);
+    return {
+      name: dish?.name,
+      kcal: dish?.kcal,
+      hasPhoto: dish?.hasPhoto,
+      textureIsReal: !!pod?.model?.userData?.photoMaterial?.map?.isTexture,
+      pods: app.ring.pods.length,
+    };
+  });
+  ok(edited.kcal === 700 && edited.name === '测试红烧肉', '修改保存成功', `${edited.name}/${edited.kcal}`);
+  ok(edited.hasPhoto === true, '没重选照片时原照片保留');
+  ok(edited.textureIsReal === true, '修改后立牌贴图还在');
+
+  /* ---------------- 菜品管理 / 导入导出 / 分享链接 ---------------- */
+
+  await page.evaluate(() => {
+    document.getElementById('btnManageFromPanel')?.click();
+  });
+  await page.waitForFunction(() => document.getElementById('manageModal')?.hidden === false, {
+    timeout: 15000,
+    polling: 100,
+  });
+  const manage = await page.evaluate(() => ({
+    rows: document.querySelectorAll('#manageList .manage-row').length,
+    count: document.getElementById('manageCount')?.textContent?.trim(),
+    exportDisabled: document.getElementById('btnManageExport')?.disabled,
+    editButtons: document.querySelectorAll('#manageList .edit-btn').length,
+    delButtons: document.querySelectorAll('#manageList .del-btn').length,
+  }));
+  ok(manage.rows === 1, '管理弹窗里列出了自定义菜', String(manage.rows));
+  ok(manage.count === '1 道', '管理弹窗显示数量', manage.count);
+  ok(manage.exportDisabled === false, '有菜时导出按钮可用');
+  ok(manage.editButtons === 1 && manage.delButtons === 1, '管理弹窗里有编辑与删除按钮');
+
+  // 生成带照片缩略图的分享链接
+  await page.evaluate(() => {
+    document.getElementById('btnManageShare').click();
+  });
+  await page.waitForFunction(
+    () => (document.getElementById('shareUrl')?.value || '').includes('#share='),
+    { timeout: 60000, polling: 150 },
+  );
+  const share = await page.evaluate(() => {
+    const url = document.getElementById('shareUrl').value;
+    return {
+      url,
+      size: document.getElementById('shareSize').textContent,
+      decoded: globalThis.__chishenme.data.parseShare(url),
+    };
+  });
+  ok(share.url.includes('#share='), '生成了 base64 分享链接');
+  ok(/KB/.test(share.size), '显示链接体积', share.size);
+  ok(share.decoded?.dishes?.length === 1, '分享链接能解码出菜品');
+  ok(share.decoded?.dishes?.[0]?.photo?.startsWith('data:image/'), '分享链接里带了压缩过的照片');
+  await page.screenshot({ path: join(shotsDir, '12-manage.png') });
+
+  // 导出：文本里要有菜、有照片
+  const exported = await page.evaluate(() => globalThis.__chishenme.data.exportText());
+  const exportPayload = JSON.parse(exported);
+  ok(exportPayload.dishes?.[0]?.name === '测试红烧肉', '导出的 JSON 里有这道菜');
+  ok(exportPayload.dishes?.[0]?.photo?.startsWith('data:image/'), '导出的文件里内嵌了照片');
+
+  // 删掉它，再用分享链接把它导入回来（完整的「分享 → 收下」链路）
+  await page.evaluate(() => {
+    document.querySelector('#manageList .manage-row .del-btn')?.click();
+  });
+  await sleep(900);
+  const afterManageDelete = await page.evaluate(() => ({
+    custom: globalThis.__chishenme.store.customDishes.length,
+    rows: document.querySelectorAll('#manageList .manage-row').length,
+  }));
+  ok(afterManageDelete.custom === 0, '管理弹窗里能删除自定义菜', String(afterManageDelete.custom));
+
+  const imported = await page.evaluate(async (url) => {
+    const payload = globalThis.__chishenme.data.parseShare(url);
+    const result = await globalThis.__chishenme.data.importText(JSON.stringify(payload));
+    return { result, custom: globalThis.__chishenme.store.customDishes.length };
+  }, share.url);
+  await sleep(1500);
+  const restored = await page.evaluate(() => {
+    const app = globalThis.__chishenme;
+    const dish = app.store.customDishes[0];
+    const pod = app.ring.pods.find((p) => p.dish.id === dish?.id);
+    const mat = pod?.model?.userData?.photoMaterial;
+    return {
+      custom: app.store.customDishes.length,
+      name: dish?.name,
+      hasPhoto: dish?.hasPhoto,
+      textureIsReal: !!mat?.map?.isTexture,
+      ownsMap: mat?.userData?.ownsMap,
+      rows: document.querySelectorAll('#manageList .manage-row').length,
+      pods: app.ring.pods.length,
+    };
+  });
+  console.log(`\n  分享回放：${restored.name} · 自定义 ${restored.custom} 道 · 盘子 ${restored.pods} 个`);
+  ok(imported.result?.added === 1, '分享链接导入了 1 道菜', JSON.stringify(imported.result));
+  ok(restored.custom === 1 && restored.name === '测试红烧肉', '导入后菜单里又是它');
+  ok(restored.hasPhoto === true, '导入带回了照片');
+  ok(restored.textureIsReal === true, '导入的照片变成了立牌贴图');
+  ok(restored.ownsMap === true, '导入的照片贴图标记为模型私有');
+  ok(restored.rows === 1, '管理列表同步更新', String(restored.rows));
+
+  // 关掉管理弹窗，后面还要用菜单列表
+  await page.evaluate(() => {
+    document.getElementById('btnManageDone')?.click();
+  });
+  await sleep(400);
+
   /* ---------------- 删除 ---------------- */
 
   await page.evaluate(() => {
@@ -673,6 +818,54 @@ try {
   ok(sheetTip === true, '手机上「取消」能关掉加菜表单');
   await sleep(300);
 
+
+  /* ---------------- 打开分享链接（真实导航 + 接收提示） ---------------- */
+
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+  // 先离开当前页面，保证下面的 goto 是真正的整页加载（只改 hash 不会重新跑 preload）
+  await page.goto('about:blank');
+  await page.goto(share.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForFunction(
+    () => document.getElementById('loading')?.classList.contains('done') === true,
+    { timeout: 300000, polling: 250 },
+  );
+  await page.waitForFunction(() => document.getElementById('shareModal')?.hidden === false, {
+    timeout: 30000,
+    polling: 150,
+  });
+  const prompt = await page.evaluate(() => ({
+    text: document.getElementById('shareSummary')?.textContent || '',
+    hash: location.hash,
+  }));
+  ok(/1 道菜/.test(prompt.text), '打开分享链接会弹出接收提示', prompt.text);
+  ok(prompt.hash.includes('#share='), '确认之前 hash 还在（刷新还能再问一次）');
+  await page.screenshot({ path: join(shotsDir, '13-share-prompt.png') });
+
+  await page.click('#btnShareAccept');
+  await page.waitForFunction(
+    () => globalThis.__chishenme?.store?.customDishes?.length === 1,
+    { timeout: 60000, polling: 200 },
+  );
+  await sleep(1000);
+  const shared = await page.evaluate(() => {
+    const app = globalThis.__chishenme;
+    const dish = app.store.customDishes[0];
+    const pod = app.ring.pods.find((p) => p.dish.id === dish?.id);
+    return {
+      hash: location.hash,
+      custom: app.store.customDishes.length,
+      name: dish?.name,
+      hasPhoto: dish?.hasPhoto,
+      textureIsReal: !!pod?.model?.userData?.photoMaterial?.map?.isTexture,
+      total: app.store.dishes.length,
+    };
+  });
+  ok(shared.custom === 1 && shared.name === '测试红烧肉', '收下分享后菜单里出现这道菜', String(shared.name));
+  ok(shared.hasPhoto === true, '收下的菜带着照片');
+  ok(shared.textureIsReal === true, '收下的照片立牌上看得见');
+  ok(shared.hash === '', '收下之后清掉 hash（刷新不会重复导入）', shared.hash);
+  console.log(`\n  分享链接：收下后自定义 ${shared.custom} 道，总数 ${shared.total} 道`);
+  await page.screenshot({ path: join(shotsDir, '14-share-imported.png') });
 
   /* ---------------- 收尾 ---------------- */
 

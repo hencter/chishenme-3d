@@ -16,7 +16,29 @@ import { dirname, join } from 'node:path';
 
 import { DISHES } from '../src/data/dishes.js';
 import { Store } from '../src/state.js';
-import { accentFromPixels, rgbToHsl } from '../src/data/custom.js';
+import {
+  __resetForTest,
+  accentFromPixels,
+  addCustomDish,
+  clearCustomDishes,
+  getCustomDishes,
+  importCustomDishes,
+  normalizeDishInput,
+  rgbToHsl,
+  updateCustomDish,
+} from '../src/data/custom.js';
+import {
+  MAX_PHOTO_CHARS,
+  blobToDataUrl,
+  buildPayload,
+  dataUrlToBlob,
+  encodeShareUrl,
+  fromBase64Url,
+  parsePayload,
+  payloadToText,
+  readShareFromHash,
+  toBase64Url,
+} from '../src/data/transfer.js';
 import { BUILDERS, buildDishModel, hasModel, STEAMY } from '../src/three/models/index.js';
 import { createPodRing, LABEL_TEX_ASPECT, LABEL_W, LABEL_H } from '../src/three/pods.js';
 import { M } from '../src/three/materials.js';
@@ -319,6 +341,234 @@ section('自定义菜品');
   ok(!s3.isBanned('c-test-1'), '菜被删掉后忌口清单自动清理');
   ok(s3.dishById('c-test-1') === null, '删掉后查不到了');
   ok(s3.visibleDishes.length === DISHES.length, '菜品表回到内置的 18 道');
+}
+
+/* ================================================================== */
+/* 7. 导入导出 / 分享链接                                               */
+/* ================================================================== */
+
+section('导入导出与分享链接');
+
+{
+  // ---- base64url 往返（含中文与 emoji） ----
+  const sample = '你好，世界 🌍 — 麻辣牛油火锅';
+  const encoded = toBase64Url(sample);
+  ok(!/[+/=]/.test(encoded), 'base64url 不含 + / =', encoded.slice(0, 24));
+  ok(fromBase64Url(encoded) === sample, 'base64url 往返一致');
+
+  const big = '菜'.repeat(200000); // 约 600KB，验证分块编码
+  ok(fromBase64Url(toBase64Url(big)) === big, '大文本 base64url 往返一致');
+  ok(fromBase64Url('!!!not-base64!!!') === null, '非法 base64 返回 null');
+  ok(fromBase64Url('') === null, '空字符串返回 null');
+  ok(fromBase64Url(null) === null, 'null 返回 null');
+
+  // ---- dataURL ↔ Blob ----
+  const blob = new Blob([new Uint8Array([1, 2, 3, 250, 255])], { type: 'image/jpeg' });
+  const dataUrl = await blobToDataUrl(blob);
+  ok(dataUrl.startsWith('data:image/jpeg;base64,'), 'Blob 编码成 dataURL', dataUrl.slice(0, 30));
+  const back = dataUrlToBlob(dataUrl);
+  ok(back instanceof Blob, 'dataURL 解回 Blob');
+  ok(back && back.size === 5 && back.type === 'image/jpeg', '解回的 Blob 内容正确');
+  ok(dataUrlToBlob('not a data url') === null, '非法 dataURL 返回 null');
+
+  // ---- payload 构建 ----
+  const dish = {
+    id: 'c-share-1',
+    name: '妈妈牌红烧肉',
+    emoji: '🍖',
+    category: 'chinese',
+    desc: '肥而不腻',
+    tip: '配米饭',
+    kcal: 620,
+    price: 0,
+    spicy: 0,
+    tags: ['自家做'],
+    accent: 0xb04a2a,
+    createdAt: 1700000000000,
+    custom: true,
+    hasPhoto: true,
+    photoTexture: { isTexture: true }, // 运行时对象，不能进 payload
+  };
+  const payload = buildPayload([dish], {
+    photos: new Map([['c-share-1', dataUrl]]),
+    exportedAt: 1700000001000,
+  });
+  ok(payload.app === 'chishenme' && payload.v === 1, 'payload 带应用标记与版本号');
+  ok(payload.dishes.length === 1, 'payload 包含一道菜');
+  ok(
+    !('photoTexture' in payload.dishes[0]) && !('hasPhoto' in payload.dishes[0]),
+    '运行时字段不会写进 payload',
+  );
+  ok(payload.dishes[0].photo === dataUrl, '照片作为 dataURL 内嵌');
+
+  // ---- 解析往返 ----
+  const parsed = parsePayload(payloadToText(payload));
+  ok(parsed.dishes.length === 1, '解析出 1 道菜');
+  ok(parsed.dishes[0].name === '妈妈牌红烧肉', '菜名保真');
+  ok(parsed.dishes[0].photo === dataUrl, '照片保真');
+  ok(parsed.dishes[0].kcal === 620 && parsed.dishes[0].price === 0, '数值保真');
+  ok(parsed.dishes[0].createdAt === 1700000000000, '创建时间保真');
+  ok(parsePayload(payloadToText(payload, { pretty: true })).dishes.length === 1, 'pretty JSON 也能解析');
+
+  // 裸数组也接受
+  const bare = parsePayload(JSON.stringify([{ name: '泡面', category: 'fastfood' }]));
+  ok(bare.dishes.length === 1 && bare.dishes[0].name === '泡面', '接受裸数组格式');
+
+  // ---- 坏数据 ----
+  const throws = (fn) => {
+    try {
+      fn();
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  ok(throws(() => parsePayload('{')), '坏 JSON 会报错');
+  ok(throws(() => parsePayload(JSON.stringify({ app: 'other-app', dishes: [{ name: 'x' }] }))),
+    '别的应用的数据会被拒绝');
+  ok(throws(() => parsePayload(JSON.stringify({ app: 'chishenme', v: 99, dishes: [{ name: 'x' }] }))),
+    '未来版本的数据会被拒绝');
+  ok(throws(() => parsePayload(JSON.stringify({ dishes: [] }))), '没有可用菜品时报错');
+  ok(throws(() => parsePayload(JSON.stringify(null))), 'null 会报错');
+
+  // 坏条目被跳过，而不是整包失败
+  const mixed = parsePayload(
+    JSON.stringify({
+      app: 'chishenme',
+      v: 1,
+      dishes: [
+        null,
+        42,
+        { name: '   ' },
+        { name: '好菜', kcal: 99999, category: '不存在', tags: 'a,b,c,d,e,f,g' },
+      ],
+    }),
+  );
+  ok(mixed.dishes.length === 1 && mixed.skipped === 3, '坏条目被跳过并计数', `skipped=${mixed.skipped}`);
+  ok(mixed.dishes[0].kcal === 5000, '越界热量被夹回上限', String(mixed.dishes[0].kcal));
+  ok(mixed.dishes[0].category === 'chinese', '未知分类退回中餐', mixed.dishes[0].category);
+  ok(mixed.dishes[0].tags.length === 5, '标签最多 5 个');
+
+  // 超长照片被丢掉，但菜保留
+  const longPhoto = parsePayload(
+    JSON.stringify({
+      dishes: [{ name: '带巨图', photo: 'data:image/png;base64,' + 'A'.repeat(MAX_PHOTO_CHARS) }],
+    }),
+  );
+  ok(longPhoto.dishes.length === 1 && !longPhoto.dishes[0].photo, '超长照片被丢弃，菜还在');
+
+  // ---- 分享链接 ----
+  const url = encodeShareUrl(payload, 'https://example.com/chishenme/?noauto=1#old=1');
+  ok(
+    url.startsWith('https://example.com/chishenme/?noauto=1#share='),
+    '分享链接保留原地址、替换 hash',
+    url.slice(0, 60),
+  );
+  const read = readShareFromHash(new URL(url).hash);
+  ok(read && read.dishes.length === 1 && read.dishes[0].name === '妈妈牌红烧肉', '从 hash 里读回分享的菜');
+  ok(read && read.dishes[0].photo === dataUrl, '分享链接里的照片也能读回');
+  ok(readShareFromHash('#share=%%%') === null, '损坏的分享 hash 返回 null');
+  ok(readShareFromHash('') === null, '空 hash 返回 null');
+  ok(readShareFromHash('#other=1') === null, '无关 hash 返回 null');
+
+  // 标准 base64（带 + / =）也兼容
+  const standard = Buffer.from(payloadToText(payload), 'utf8').toString('base64');
+  const read2 = readShareFromHash(`#share=${encodeURIComponent(standard)}`);
+  ok(read2 && read2.dishes.length === 1, '标准 base64 的分享也能读');
+}
+
+/* ================================================================== */
+/* 8. 自定义菜仓库：改 / 导入 / 清空                                     */
+/* ================================================================== */
+
+section('自定义菜仓库');
+
+{
+  const fakeStorage = () => {
+    const map = new Map();
+    return {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => map.set(k, v),
+      removeItem: (k) => map.delete(k),
+    };
+  };
+  globalThis.localStorage = fakeStorage();
+
+  __resetForTest([]);
+  const a = await addCustomDish({ name: '蛋炒饭', category: 'chinese', kcal: 550, price: 15 });
+  ok(a.id && a.custom === true, '新增自定义菜', a.id);
+  ok(getCustomDishes().length === 1, '仓库里有 1 道菜');
+
+  // 修改：字段更新、id 不变、位置不变、创建时间不变
+  const b = await updateCustomDish(a.id, {
+    name: '扬州炒饭',
+    kcal: 600,
+    price: 22,
+    category: 'chinese',
+  });
+  ok(b && b.id === a.id, '修改后 id 不变');
+  ok(b.name === '扬州炒饭' && b.kcal === 600 && b.price === 22, '修改后的字段生效');
+  ok(b.createdAt === a.createdAt, '修改不会改掉创建时间');
+  ok(getCustomDishes()[0].id === a.id, '修改是原地替换，位置不变');
+  ok((await updateCustomDish('不存在', { name: 'x' })) === null, '改不存在的菜返回 null');
+
+  // 导入合并：同 id 更新，新 id 新增
+  const result = await importCustomDishes([
+    { id: a.id, name: '扬州炒饭（改）', category: 'chinese', kcal: 610, price: 23 },
+    {
+      id: 'c-imported-1',
+      name: '番茄鸡蛋面',
+      category: 'chinese',
+      kcal: 480,
+      price: 18,
+      photoBlob: new Blob(['x']),
+    },
+  ]);
+  ok(result.added === 1 && result.updated === 1, '导入合并计数正确', JSON.stringify(result));
+  const list = getCustomDishes();
+  ok(list.length === 2, '合并后共有 2 道菜', String(list.length));
+  ok(list.find((d) => d.id === a.id)?.name === '扬州炒饭（改）', '同 id 的菜被更新');
+  ok(list.find((d) => d.id === 'c-imported-1')?.name === '番茄鸡蛋面', '新 id 的菜被加入');
+
+  // 导入数据里没有照片时，原来的照片会被清掉（导入结果 == 数据）
+  __resetForTest([{ id: 'c-photo', name: '有照片的菜', category: 'chinese', hasPhoto: true }]);
+  const r2 = await importCustomDishes([{ id: 'c-photo', name: '有照片的菜（新）', category: 'chinese' }]);
+  ok(r2.updated === 1, '同 id 更新');
+  ok(getCustomDishes()[0].hasPhoto === false, '导入没带照片时清掉旧照片');
+
+  // replace 模式
+  const r3 = await importCustomDishes([{ id: 'c-only', name: '只剩这道', category: 'dessert' }], {
+    mode: 'replace',
+  });
+  ok(r3.total === 1 && getCustomDishes()[0].id === 'c-only', 'replace 模式会清掉原来的菜');
+
+  // 清空
+  const cleared = await clearCustomDishes();
+  ok(cleared === 1 && getCustomDishes().length === 0, '清空自定义菜', String(cleared));
+
+  // normalizeDishInput：字段裁剪与兜底
+  const n = normalizeDishInput({
+    name: 'x'.repeat(100),
+    emoji: '🍜🍜🍜🍜🍜🍜',
+    category: 'japanese',
+    desc: 'y'.repeat(300),
+    kcal: -10,
+    price: 1e9,
+    spicy: 99,
+    tags: ['a', 'b', 'c', 'd', 'e', 'f'],
+    accent: 'red',
+  });
+  ok(n.name.length === 24, '菜名裁剪到 24 字');
+  ok(n.desc.length === 120, '介绍裁剪到 120 字');
+  ok(n.kcal === 0 && n.price === 9999 && n.spicy === 3, '数值夹在合法区间');
+  ok(n.tags.length === 5, '标签最多 5 个');
+  ok(n.accent === 0xffb347, '非法主题色退回默认色');
+  ok(n.emoji.length <= 8, '图标长度受控');
+
+  const dirtyId = normalizeDishInput({ id: '<script>alert(1)</script>', name: 'x' });
+  ok(/^[A-Za-z0-9_-]+$/.test(dirtyId.id) && dirtyId.id.startsWith('c'), '非法 id 会被替换成新生成的 id');
+
+  __resetForTest([]);
 }
 
 /* ================================================================== */

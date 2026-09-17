@@ -9,11 +9,24 @@ import * as THREE from 'three';
 import { DISHES } from './data/dishes.js';
 import {
   addCustomDish,
+  clearCustomDishes,
   decodeImage,
   getCustomDishes,
   getPhotoBlob,
+  importCustomDishes,
+  makePhotoThumb,
   removeCustomDish,
+  updateCustomDish,
 } from './data/custom.js';
+import {
+  blobToDataUrl,
+  buildPayload,
+  dataUrlToBlob,
+  encodeShareUrl,
+  parsePayload,
+  payloadToText,
+  readShareFromHash,
+} from './data/transfer.js';
 import { Store } from './state.js';
 import { createStage } from './three/scene.js';
 import { createPodRing } from './three/pods.js';
@@ -123,7 +136,15 @@ const hud = createHud({
       hud.toast('已把它请回菜单');
     },
     addDish: (input, blob, previewUrl) => addDishAction(input, blob, previewUrl),
+    updateDish: (id, input, blob, previewUrl, opts) =>
+      updateDishAction(id, input, blob, previewUrl, opts),
     removeDish: (dish) => removeDishAction(dish),
+    exportDishes: () => exportDishesAction(),
+    importDishes: (text) => importDishes(text),
+    shareUrl: (opts) => shareUrlFor(opts),
+    clearDishes: () => clearDishesAction(),
+    acceptShare: () => acceptPendingShare(),
+    declineShare: () => declinePendingShare(),
     focusView: () => {
       const pod = currentPod();
       if (pod) director.focusOnPod(pod, 0.6);
@@ -252,14 +273,20 @@ async function photoTextureFromBlob(blob) {
 }
 
 /**
- * 启动时把用户自己加的菜从存储里读回来，并把照片解码成贴图。
- * 任何一张照片读失败都只影响它自己，不会拖垮整个加载流程。
+ * 把自定义菜里还没贴图的照片解码成 3D 贴图。
+ * 任何一张照片读失败都只影响它自己，不会拖垮整个流程。
  */
-async function loadCustomDishes() {
-  const list = getCustomDishes();
+async function attachPhotoTextures(list) {
   let withPhoto = 0;
   for (const dish of list) {
-    if (!dish.hasPhoto) continue;
+    if (!dish.hasPhoto) {
+      dish.photoTexture = null;
+      continue;
+    }
+    if (dish.photoTexture) {
+      withPhoto += 1;
+      continue;
+    }
     try {
       const blob = await getPhotoBlob(dish.id);
       if (!blob) {
@@ -273,9 +300,27 @@ async function loadCustomDishes() {
       dish.hasPhoto = false;
     }
   }
+  return withPhoto;
+}
+
+/**
+ * 重新把自定义菜仓库里的数据同步进 Store 和星盘。
+ * @param {{changedIds?: string[], resetOrder?: boolean}} [opts]
+ *   changedIds：内容变过的菜，先把旧盘子从星盘里彻底忘掉，再用新数据重建
+ */
+async function refreshCustomDishes({ changedIds = [], resetOrder = false } = {}) {
+  for (const id of changedIds) ring.forget(id);
+  const list = getCustomDishes();
+  const withPhoto = await attachPhotoTextures(list);
+  if (resetOrder) order = [];
   store.setCustomDishes(list);
-  order = [];
+  ring.preload(list);
   return { total: list.length, withPhoto };
+}
+
+/** 启动时把用户自己加的菜从存储里读回来 */
+async function loadCustomDishes() {
+  return refreshCustomDishes({ resetOrder: true });
 }
 
 async function addDishAction(input, blob, previewUrl) {
@@ -301,6 +346,27 @@ async function addDishAction(input, blob, previewUrl) {
   if (idx >= 0) selectDish(idx, dish, { showCard: false });
 }
 
+async function updateDishAction(id, input, blob, previewUrl, opts = {}) {
+  const dish = await updateCustomDish(id, input, {
+    photoBlob: blob,
+    previewUrl,
+    removePhoto: !!opts.removePhoto,
+  });
+  if (!dish) {
+    hud.toast('这道菜已经不在菜单里了');
+    return null;
+  }
+  await refreshCustomDishes({ changedIds: [id] });
+  const fresh = store.dishById(id);
+  if (fresh) {
+    const idx = visibleDishes.findIndex((d) => d.id === id);
+    if (idx >= 0) selectDish(idx, fresh, { showCard: false });
+  }
+  hud.toast(`「${dish.name}」已经更新`);
+  hud.buzz(20);
+  return dish;
+}
+
 async function removeDishAction(dish) {
   await removeCustomDish(dish.id);
   store.unban(dish.id);
@@ -312,6 +378,136 @@ async function removeDishAction(dish) {
   }
   store.setCustomDishes(remaining);
   hud.toast(`「${dish.name}」已从菜单里删掉`);
+}
+
+async function clearDishesAction() {
+  const list = getCustomDishes();
+  if (!list.length) {
+    hud.toast('还没有自己加的菜');
+    return 0;
+  }
+  for (const dish of list) ring.forget(dish.id);
+  const count = await clearCustomDishes();
+  if (store.category === 'mine') store.setCategory('all');
+  store.setCustomDishes([]);
+  hud.toast(`已清空 ${count} 道自己加的菜`);
+  return count;
+}
+
+/* ---------------- 导入 / 导出 / 分享链接 ---------------- */
+
+/** 自定义菜 + 照片 dataURL → payload */
+async function collectPhotos(list, { thumb = false } = {}) {
+  const photos = new Map();
+  for (const dish of list) {
+    if (!dish.hasPhoto) continue;
+    const blob = await getPhotoBlob(dish.id);
+    if (!blob) continue;
+    try {
+      const picked = thumb ? await makePhotoThumb(blob) : blob;
+      photos.set(dish.id, await blobToDataUrl(picked));
+    } catch (err) {
+      console.warn('[transfer] 照片编码失败', dish.id, err);
+    }
+  }
+  return photos;
+}
+
+async function exportDishesText() {
+  const list = getCustomDishes();
+  if (!list.length) return null;
+  const photos = await collectPhotos(list);
+  return payloadToText(buildPayload(list, { photos }), { pretty: true });
+}
+
+async function exportDishesAction() {
+  const text = await exportDishesText();
+  if (!text) {
+    hud.toast('还没有自己加的菜可以导出');
+    return null;
+  }
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `chishenme-dishes-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  hud.toast(`已导出 ${getCustomDishes().length} 道菜`);
+  return text;
+}
+
+async function importDishesFromPayload(payload, { announce = true } = {}) {
+  const entries = payload?.dishes || [];
+  if (!entries.length) throw new Error('里面没有可用的菜品');
+
+  const prepared = entries.map((entry) => {
+    let photoBlob = null;
+    if (entry.photo) {
+      try {
+        photoBlob = dataUrlToBlob(entry.photo);
+      } catch {
+        /* 坏图就当没照片 */
+      }
+    }
+    return { ...entry, photoBlob };
+  });
+
+  const changedIds = prepared.map((e) => e.id).filter(Boolean);
+  const result = await importCustomDishes(prepared, { mode: 'merge' });
+  await refreshCustomDishes({ changedIds });
+  if (announce) {
+    const skipped = payload.skipped ? ` · 跳过 ${payload.skipped} 条无效数据` : '';
+    hud.toast(`导入完成：新增 ${result.added} 道 · 更新 ${result.updated} 道${skipped}`, 3200);
+    hud.buzz(22);
+  }
+  return result;
+}
+
+async function importDishes(text, opts = {}) {
+  return importDishesFromPayload(parsePayload(text), opts);
+}
+
+async function shareUrlFor({ withPhotos = true } = {}) {
+  const list = getCustomDishes();
+  if (!list.length) return null;
+  const photos = withPhotos ? await collectPhotos(list, { thumb: true }) : new Map();
+  return encodeShareUrl(buildPayload(list, { photos }), globalThis.location?.href || '');
+}
+
+/* ---------------- 收到别人分享的链接 ---------------- */
+
+let pendingShare = null;
+
+function clearShareHash() {
+  const loc = globalThis.location;
+  if (!loc || !globalThis.history?.replaceState) return;
+  try {
+    globalThis.history.replaceState(null, '', loc.pathname + (loc.search || ''));
+  } catch {
+    /* 忽略 */
+  }
+}
+
+async function acceptPendingShare() {
+  const payload = pendingShare;
+  pendingShare = null;
+  clearShareHash();
+  if (!payload) return;
+  try {
+    const result = await importDishesFromPayload(payload);
+    hud.toast(`朋友的菜单已加入：${result.added} 道新菜`, 3000);
+  } catch (err) {
+    console.error('[share] 导入失败', err);
+    hud.toast('分享的菜没能导入，可能链接不完整');
+  }
+}
+
+function declinePendingShare() {
+  pendingShare = null;
+  clearShareHash();
 }
 
 function resetView() {
@@ -510,11 +706,19 @@ async function preload() {
   await nextFrame();
   await nextFrame();
 
+  // 链接里带着别人的菜单（#share=...）：加载完之后问一句要不要收下
+  pendingShare = readShareFromHash(globalThis.location?.hash || '');
+
   hud.finishLoading();
   hud.setDockNote('拖动旋转视角 · 滚轮缩放 · 点击美食直接选中');
   ready = true;
 
-  if (custom.total) {
+  if (pendingShare) {
+    hud.openSharePrompt({
+      count: pendingShare.dishes.length,
+      photos: pendingShare.dishes.filter((d) => d.photo).length,
+    });
+  } else if (custom.total) {
     hud.toast(`菜单里有 ${custom.total} 道你自己加的菜`, 3000);
   } else if (!store.seenHelp) {
     setTimeout(() => hud.openHelp(), 900);
@@ -611,4 +815,17 @@ preload().catch((err) => {
 });
 
 // 便于调试
-globalThis.__chishenme = { store, stage, ring, director, hud, effects };
+globalThis.__chishenme = {
+  store,
+  stage,
+  ring,
+  director,
+  hud,
+  effects,
+  data: {
+    exportText: () => exportDishesText(),
+    importText: (text) => importDishes(text, { announce: false }),
+    shareUrl: (opts) => shareUrlFor(opts),
+    parseShare: (href) => readShareFromHash(new URL(href, globalThis.location.href).hash),
+  },
+};

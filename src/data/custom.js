@@ -292,6 +292,41 @@ export async function decodeImage(blob) {
   }
 }
 
+/** 分享链接里用的照片缩略图：默认最长边 360，一张大约 10~30KB */
+export const THUMB_MAX_EDGE = 360;
+export const THUMB_QUALITY = 0.72;
+
+/**
+ * 把照片再压成一张小图，专门给 base64 分享链接用。
+ * 失败时退回原图，绝不因为缩略图出错就让分享功能挂掉。
+ * @param {Blob} blob
+ * @param {{maxEdge?: number, quality?: number}} [opts]
+ * @returns {Promise<Blob>}
+ */
+export async function makePhotoThumb(blob, opts = {}) {
+  const maxEdge = opts.maxEdge || THUMB_MAX_EDGE;
+  const quality = opts.quality || THUMB_QUALITY;
+  const bitmap = await decodeImage(blob);
+  try {
+    const sw = bitmap.width || maxEdge;
+    const sh = bitmap.height || maxEdge;
+    const scale = Math.min(1, maxEdge / Math.max(sw, sh));
+    const w = Math.max(1, Math.round(sw * scale));
+    const h = Math.max(1, Math.round(sh * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const out = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', quality),
+    );
+    return out || blob;
+  } finally {
+    if (bitmap.close) bitmap.close();
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* 仓库                                                                 */
 /* ------------------------------------------------------------------ */
@@ -312,6 +347,42 @@ export function makeId() {
   return `c${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 }
 
+/** 只接受安全的 id 字符，防止导入的数据把 dataset / 查询搞脏 */
+function normalizeId(raw) {
+  if (typeof raw !== 'string') return '';
+  const id = raw.trim().slice(0, 40);
+  return /^[A-Za-z0-9_-]+$/.test(id) ? id : '';
+}
+
+/**
+ * 把任意来源（表单 / 导入 / 分享链接）的菜品数据规范化。
+ * 纯函数，方便测试，也保证 add / update / import 三条路的规则完全一致。
+ * @param {object} input
+ * @param {{id?: string|null, now?: number}} [opts]
+ */
+export function normalizeDishInput(input = {}, { id = null, now = Date.now() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const category = Object.prototype.hasOwnProperty.call(CATEGORY_EMOJI, src.category)
+    ? src.category
+    : 'chinese';
+  return {
+    id: id || normalizeId(src.id) || makeId(),
+    name: String(src.name || '').trim().slice(0, 24) || '没名字的菜',
+    emoji: String(src.emoji || CATEGORY_EMOJI[category] || '🍽️').slice(0, 8),
+    category,
+    desc: String(src.desc || '').trim().slice(0, 120),
+    tip: String(src.tip || '').trim().slice(0, 120),
+    kcal: clampInt(src.kcal, 0, 5000, 500),
+    price: clampInt(src.price, 0, 9999, 30),
+    spicy: clampInt(src.spicy, 0, 3, 0),
+    tags: normalizeTags(src.tags),
+    accent: typeof src.accent === 'number' ? src.accent : 0xffb347,
+    custom: true,
+    createdAt: clampInt(src.createdAt, 0, 8.64e15, now) || now,
+    hasPhoto: false,
+  };
+}
+
 /**
  * 新增一道菜。
  * @param {object} input 表单数据
@@ -319,23 +390,8 @@ export function makeId() {
  * @param {string|null} previewUrl 已经在表单里生成好的预览 URL
  */
 export async function addCustomDish(input, photoBlob = null, previewUrl = null) {
-  const id = input.id || makeId();
-  const dish = {
-    id,
-    name: String(input.name || '').trim().slice(0, 24) || '没名字的菜',
-    emoji: input.emoji || CATEGORY_EMOJI[input.category] || '🍽️',
-    category: input.category || 'chinese',
-    desc: String(input.desc || '').trim().slice(0, 120),
-    tip: String(input.tip || '').trim().slice(0, 120),
-    kcal: clampInt(input.kcal, 0, 5000, 500),
-    price: clampInt(input.price, 0, 9999, 30),
-    spicy: clampInt(input.spicy, 0, 3, 0),
-    tags: normalizeTags(input.tags),
-    accent: typeof input.accent === 'number' ? input.accent : 0xffb347,
-    custom: true,
-    createdAt: Date.now(),
-    hasPhoto: !!photoBlob,
-  };
+  const dish = normalizeDishInput(input);
+  const id = dish.id;
 
   if (photoBlob) {
     const saved = await idbPut(id, photoBlob);
@@ -346,6 +402,110 @@ export async function addCustomDish(input, photoBlob = null, previewUrl = null) 
   dishes = [dish, ...dishes];
   safeWriteMeta(dishes);
   return dish;
+}
+
+/**
+ * 修改一道已经存在的菜（原地替换，位置不变）。
+ * @param {string} id
+ * @param {object} input 表单数据
+ * @param {{photoBlob?: Blob|null, previewUrl?: string|null, removePhoto?: boolean}} [opts]
+ */
+export async function updateCustomDish(id, input, opts = {}) {
+  const index = dishes.findIndex((d) => d.id === id);
+  if (index < 0) return null;
+  const prev = dishes[index];
+  const dish = normalizeDishInput({ ...prev, ...(input || {}) }, { id });
+  dish.createdAt = prev.createdAt;
+  dish.hasPhoto = prev.hasPhoto;
+
+  if (opts.photoBlob) {
+    dish.hasPhoto = await idbPut(id, opts.photoBlob);
+    if (opts.previewUrl) {
+      const old = urlCache.get(id);
+      if (old) URL.revokeObjectURL(old);
+      urlCache.set(id, opts.previewUrl);
+    }
+  } else if (opts.removePhoto) {
+    await idbDelete(id);
+    const old = urlCache.get(id);
+    if (old) {
+      URL.revokeObjectURL(old);
+      urlCache.delete(id);
+    }
+    dish.hasPhoto = false;
+  }
+
+  dishes = dishes.slice();
+  dishes[index] = dish;
+  safeWriteMeta(dishes);
+  return dish;
+}
+
+/**
+ * 批量导入（合并 / 覆盖）。
+ * 同 id 视为同一道菜：导入数据里没有照片时会把它原来的照片也清掉，
+ * 保证「导入后的菜单 == 导入的那份数据」。
+ * @param {object[]} entries 每项可带 `photoBlob`
+ * @param {{mode?: 'merge'|'replace'}} [opts]
+ */
+export async function importCustomDishes(entries, { mode = 'merge' } = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  const base = mode === 'replace' ? [] : dishes.slice();
+  const byId = new Map(base.map((d) => [d.id, d]));
+  let added = 0;
+  let updated = 0;
+
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const existing = entry.id ? byId.get(entry.id) : null;
+    const dish = normalizeDishInput(entry, { id: existing?.id || normalizeId(entry.id) || null });
+    if (existing) {
+      dish.createdAt = existing.createdAt;
+      updated += 1;
+    } else {
+      added += 1;
+    }
+
+    if (entry.photoBlob) {
+      dish.hasPhoto = await idbPut(dish.id, entry.photoBlob);
+    } else if (existing?.hasPhoto) {
+      await idbDelete(dish.id);
+      dish.hasPhoto = false;
+    }
+
+    if (entry.previewUrl) {
+      const old = urlCache.get(dish.id);
+      if (old) URL.revokeObjectURL(old);
+      urlCache.set(dish.id, entry.previewUrl);
+    } else if (!dish.hasPhoto) {
+      const old = urlCache.get(dish.id);
+      if (old) {
+        URL.revokeObjectURL(old);
+        urlCache.delete(dish.id);
+      }
+    }
+    byId.set(dish.id, dish);
+  }
+
+  dishes = [...byId.values()];
+  safeWriteMeta(dishes);
+  return { added, updated, total: dishes.length };
+}
+
+/** 清空所有自定义菜（连同照片） */
+export async function clearCustomDishes() {
+  const ids = dishes.map((d) => d.id);
+  dishes = [];
+  safeWriteMeta(dishes);
+  for (const id of ids) {
+    const url = urlCache.get(id);
+    if (url) {
+      URL.revokeObjectURL(url);
+      urlCache.delete(id);
+    }
+    await idbDelete(id);
+  }
+  return ids.length;
 }
 
 export async function removeCustomDish(id) {

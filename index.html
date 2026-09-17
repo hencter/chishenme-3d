@@ -65,6 +65,7 @@
           <button class="add-dish-btn" id="btnAddFromPanel" type="button">
             <span aria-hidden="true">📷</span> 拍照加一道菜
           </button>
+          <button class="ghost-btn wide" id="btnManageFromPanel" type="button">🗂 管理我的菜品</button>
           <button class="ghost-btn wide" id="btnReshuffle" type="button">🔀 换一批</button>
         </div>
       </aside>
@@ -135,6 +136,7 @@
             <li><b>点美食</b><span>想吃的直接点盘子，镜头会飞过去。再点一次「就它了」。</span></li>
             <li><b>决策风格</b><span>均衡 / 不重样 / 尝鲜 / 省钱 / 轻食 —— 决定随机权重怎么算。</span></li>
             <li><b>换一批</b><span>把这一刻的星盘重新排布，换个心情。</span></li>
+            <li><b>我的菜品</b><span>自己加的菜可以改、删、导出备份；还能生成一条 base64 链接，把整桌菜分享给朋友。</span></li>
             <li><b>忌口</b><span>在结果卡片里点「以后别推荐」，那道菜就再也不会出现。</span></li>
             <li><b>视角</b><span>鼠标 / 手指拖动旋转，滚轮或双指缩放，双击空白处回到全景。</span></li>
           </ul>
@@ -212,6 +214,65 @@
             <button class="ghost-btn" id="btnAddCancel" type="button">取消</button>
           </div>
           <p class="sheet-tip" id="addTip"></p>
+        </div>
+      </div>
+
+      <!-- ========== 菜品管理（自定义菜 / 导入导出 / 分享） ========== -->
+      <div class="modal" id="manageModal" hidden>
+        <div class="modal-backdrop" data-close="manage"></div>
+        <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
+          <button class="card-close" id="btnManageClose" type="button" aria-label="关闭">✕</button>
+          <h2 id="manageTitle">我的菜品</h2>
+          <p class="sheet-sub">
+            自己定义的菜只存在这台设备的浏览器里（localStorage + IndexedDB）。
+            可以导出备份、导入恢复，也可以用一条 base64 链接把整桌菜分享给别人。
+          </p>
+
+          <div class="manage-head">
+            <span class="panel-sub" id="manageCount">还没有</span>
+            <span class="panel-sub">照片只留在本机，分享链接里会压成小图</span>
+          </div>
+          <div class="manage-list" id="manageList"></div>
+
+          <div class="manage-actions">
+            <button class="ghost-btn" id="btnManageAdd" type="button">✍️ 手动加一道</button>
+            <button class="ghost-btn" id="btnManageImport" type="button">📥 导入文件</button>
+            <button class="ghost-btn" id="btnManageExport" type="button">📤 导出文件</button>
+            <button class="ghost-btn" id="btnManageShare" type="button">🔗 分享链接</button>
+          </div>
+          <input id="importInput" type="file" accept="application/json,.json" hidden />
+
+          <div class="share-panel" id="sharePanel" hidden>
+            <label class="share-toggle">
+              <input type="checkbox" id="shareWithPhotos" checked />
+              <span>链接里带上照片（压成 360px 小图，链接会变长）</span>
+            </label>
+            <textarea id="shareUrl" readonly rows="3" spellcheck="false" placeholder="正在生成…"></textarea>
+            <div class="share-foot">
+              <span id="shareSize"></span>
+              <button class="ghost-btn" id="btnShareCopy" type="button">复制链接</button>
+            </div>
+          </div>
+
+          <div class="sheet-actions">
+            <button class="primary-btn" id="btnManageDone" type="button">完成</button>
+            <button class="ghost-btn danger" id="btnManageClear" type="button">清空我的菜品</button>
+          </div>
+          <p class="sheet-tip" id="manageTip"></p>
+        </div>
+      </div>
+
+      <!-- ========== 收到分享链接 ========== -->
+      <div class="modal" id="shareModal" hidden>
+        <div class="modal-backdrop" data-close="share"></div>
+        <div class="help-card share-card" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+          <h2 id="shareTitle">收到一份菜单分享</h2>
+          <p class="result-desc" id="shareSummary"></p>
+          <div class="sheet-actions">
+            <button class="primary-btn" id="btnShareAccept" type="button">加进我的菜单</button>
+            <button class="ghost-btn" id="btnShareDecline" type="button">不用了</button>
+          </div>
+          <p class="sheet-tip">导入的菜会存到你这台设备的浏览器里，随时可以再删掉。</p>
         </div>
       </div>
 

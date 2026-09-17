@@ -12,7 +12,7 @@ import {
   hexCss,
   spicyLabel,
 } from '../data/dishes.js';
-import { CATEGORY_EMOJI, EMOJI_CHOICES, preparePhoto } from '../data/custom.js';
+import { CATEGORY_EMOJI, EMOJI_CHOICES, preparePhoto, getPhotoUrl } from '../data/custom.js';
 import { DECISION_STYLES, QUALITY_LEVELS } from '../state.js';
 
 const $ = (id) => document.getElementById(id);
@@ -90,12 +90,38 @@ export function createHud({ store, actions }) {
     fldCategory: $('fldCategory'),
     fldSpicy: $('fldSpicy'),
     fldEmoji: $('fldEmoji'),
+    // 菜品管理 / 导入导出 / 分享
+    btnManageFromPanel: $('btnManageFromPanel'),
+    manageModal: $('manageModal'),
+    btnManageClose: $('btnManageClose'),
+    btnManageDone: $('btnManageDone'),
+    btnManageAdd: $('btnManageAdd'),
+    btnManageImport: $('btnManageImport'),
+    btnManageExport: $('btnManageExport'),
+    btnManageShare: $('btnManageShare'),
+    btnManageClear: $('btnManageClear'),
+    manageList: $('manageList'),
+    manageCount: $('manageCount'),
+    manageTip: $('manageTip'),
+    importInput: $('importInput'),
+    sharePanel: $('sharePanel'),
+    shareWithPhotos: $('shareWithPhotos'),
+    shareUrl: $('shareUrl'),
+    shareSize: $('shareSize'),
+    btnShareCopy: $('btnShareCopy'),
+    // 收到分享链接
+    shareModal: $('shareModal'),
+    shareSummary: $('shareSummary'),
+    btnShareAccept: $('btnShareAccept'),
+    btnShareDecline: $('btnShareDecline'),
   };
 
   let activeDishId = null;
   let resultDish = null;
   let toastTimer = 0;
   let loadingDone = false;
+  let shareToken = 0;
+  let clearTimer = 0;
 
   const on = (node, type, fn) => {
     if (node) node.addEventListener(type, fn);
@@ -233,6 +259,18 @@ export function createHud({ store, actions }) {
           mine.textContent = '我的';
           row.append(mine);
 
+          const edit = document.createElement('button');
+          edit.type = 'button';
+          edit.className = 'edit-btn';
+          edit.title = '改一改这道菜';
+          edit.textContent = '✏️';
+          edit.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeMobilePanels();
+            openAdd(dish);
+          });
+          row.append(edit);
+
           const del = document.createElement('button');
           del.type = 'button';
           del.className = 'del-btn';
@@ -355,6 +393,202 @@ export function createHud({ store, actions }) {
   }
 
   /* ------------------------------------------------------------------ */
+  /* 菜品管理 / 导入导出 / 分享                                            */
+  /* ------------------------------------------------------------------ */
+
+  function renderManage() {
+    if (!el.manageList) return;
+    const list = store.customDishes;
+    const has = list.length > 0;
+
+    if (el.manageCount) el.manageCount.textContent = has ? `${list.length} 道` : '还没有';
+    for (const btn of [el.btnManageExport, el.btnManageShare, el.btnManageClear]) {
+      if (btn) btn.disabled = !has;
+    }
+    if (el.sharePanel && !has) el.sharePanel.hidden = true;
+
+    if (!has) {
+      const note = document.createElement('p');
+      note.className = 'empty-note';
+      note.textContent =
+        '还没有自己定义的菜。拍一张，或者「手动加一道」；也可以用「导入文件」把之前的备份恢复回来。';
+      el.manageList.replaceChildren(note);
+      return;
+    }
+
+    el.manageList.replaceChildren(
+      ...list.map((dish) => {
+        const row = document.createElement('div');
+        row.className = 'manage-row';
+        row.dataset.id = dish.id;
+
+        const emoji = document.createElement('span');
+        emoji.className = 'emoji';
+        emoji.textContent = dish.emoji;
+
+        const meta = document.createElement('div');
+        meta.className = 'manage-meta';
+        const nm = document.createElement('div');
+        nm.className = 'manage-name';
+        nm.textContent = dish.name;
+        const sub = document.createElement('div');
+        sub.className = 'manage-sub';
+        const bits = [
+          CATEGORY_NAME[dish.category] || dish.category,
+          `${dish.kcal} kcal`,
+          `¥${dish.price}`,
+        ];
+        if (dish.hasPhoto) bits.push('有照片');
+        sub.textContent = bits.join(' · ');
+        meta.append(nm, sub);
+
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'edit-btn';
+        edit.title = '改一改这道菜';
+        edit.textContent = '✏️';
+        edit.addEventListener('click', () => {
+          actions.click?.();
+          closeManage();
+          openAdd(dish);
+        });
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'del-btn';
+        del.title = '从菜单里删掉这道菜';
+        del.textContent = '🗑';
+        del.addEventListener('click', () => {
+          actions.click?.();
+          actions.removeDish?.(dish);
+        });
+
+        row.append(emoji, meta, edit, del);
+        return row;
+      }),
+    );
+  }
+
+  function resetClearButton() {
+    if (!el.btnManageClear) return;
+    clearTimeout(clearTimer);
+    el.btnManageClear.textContent = '清空我的菜品';
+    el.btnManageClear.classList.remove('confirm');
+  }
+
+  function openManage() {
+    if (!el.manageModal) return;
+    if (el.sharePanel) el.sharePanel.hidden = true;
+    if (el.shareUrl) el.shareUrl.value = '';
+    if (el.shareSize) el.shareSize.textContent = '';
+    if (el.manageTip) {
+      el.manageTip.textContent = '';
+      el.manageTip.classList.remove('error');
+    }
+    resetClearButton();
+    renderManage();
+    el.manageModal.hidden = false;
+  }
+
+  function closeManage() {
+    if (!el.manageModal) return;
+    el.manageModal.hidden = true;
+    if (el.sharePanel) el.sharePanel.hidden = true;
+    if (el.shareUrl) el.shareUrl.value = '';
+  }
+
+  function openSharePrompt(info = {}) {
+    if (!el.shareModal) return;
+    if (el.shareSummary) {
+      const photos = info.photos ? `，其中 ${info.photos} 道带照片` : '';
+      el.shareSummary.textContent = `这条链接里有 ${info.count || 0} 道菜${photos}。加进菜单后会保存在这台设备上，同名的菜会被链接里的版本覆盖。`;
+    }
+    el.shareModal.hidden = false;
+  }
+
+  function closeSharePrompt() {
+    if (el.shareModal) el.shareModal.hidden = true;
+  }
+
+  async function copyShareUrl() {
+    const text = el.shareUrl?.value || '';
+    if (!text) return false;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        el.shareUrl.select();
+        ok = document.execCommand('copy');
+      } catch {
+        ok = false;
+      }
+    }
+    toast(ok ? '分享链接已复制，发给朋友吧' : '复制失败，长按链接手动复制');
+    return ok;
+  }
+
+  /** 生成分享链接（照片缩略图是异步压的，用 token 防止旧结果盖掉新结果） */
+  async function renderShareUrl() {
+    const withPhotos = el.shareWithPhotos ? el.shareWithPhotos.checked : true;
+    const token = (shareToken += 1);
+    if (el.shareUrl) el.shareUrl.value = '';
+    if (el.shareSize) el.shareSize.textContent = withPhotos ? '正在压照片…' : '正在生成…';
+
+    let url = null;
+    try {
+      url = await actions.shareUrl?.({ withPhotos });
+    } catch (err) {
+      console.error('[share] 生成失败', err);
+    }
+    if (token !== shareToken || !el.shareUrl) return;
+
+    if (!url) {
+      if (el.shareSize) el.shareSize.textContent = '';
+      toast('还没有自己加的菜可以分享');
+      return;
+    }
+
+    el.shareUrl.value = url;
+    const kb = Math.max(1, Math.round(url.length / 1024));
+    if (el.shareSize) {
+      el.shareSize.textContent =
+        kb > 100 ? `约 ${kb} KB · 有点长，个别聊天软件可能截断` : `约 ${kb} KB`;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('分享链接已复制，发给朋友吧');
+    } catch {
+      el.shareUrl.focus();
+      el.shareUrl.select();
+      toast('链接已生成，点「复制链接」拿走');
+    }
+  }
+
+  async function handleImportFile(file) {
+    if (!file) return;
+    if (el.manageTip) {
+      el.manageTip.textContent = '正在读取…';
+      el.manageTip.classList.remove('error');
+    }
+    try {
+      const text = await file.text();
+      await actions.importDishes?.(text);
+      if (el.manageTip) el.manageTip.textContent = `已从「${file.name}」导入`;
+    } catch (err) {
+      console.error('[import] 失败', err);
+      if (el.manageTip) {
+        el.manageTip.textContent = `导入失败：${err?.message || err}`;
+        el.manageTip.classList.add('error');
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
   /* 结果卡片                                                             */
   /* ------------------------------------------------------------------ */
 
@@ -428,6 +662,7 @@ export function createHud({ store, actions }) {
     width: 0,
     height: 0,
     editingId: null,
+    removePhoto: false,
   };
 
   function addTip(msg = '', isError = false) {
@@ -516,31 +751,67 @@ export function createHud({ store, actions }) {
     }
   }
 
-  function openAdd() {
+  function renderAddMode() {
+    const editing = !!draft.editingId;
+    if (el.btnAddTitle) el.btnAddTitle.textContent = editing ? '改一改这道菜' : '拍张照，加道菜';
+    if (el.btnAddSave) el.btnAddSave.textContent = editing ? '保存修改' : '加进菜单';
+    const sub = document.querySelector('#addModal .sheet-sub');
+    if (sub) {
+      sub.textContent = editing
+        ? '改完点保存，星盘上的它立刻更新；照片重选一张就会替换掉原来的。'
+        : '照片只存在这台设备上，不会上传到任何服务器。加完就能一起转。';
+    }
+  }
+
+  /**
+   * 打开加菜表单。
+   * @param {object|null} dish 传了就是编辑模式（改一道已有的自定义菜）
+   */
+  async function openAdd(dish = null) {
     if (!el.addModal) return;
     releaseDraft();
-    draft.emoji = CATEGORY_EMOJI[draft.category] || '🍽️';
-    draft.emojiPicked = false;
-    draft.spicy = 0;
-    draft.accent = 0xffb347;
+    draft.editingId = dish?.id || null;
+    draft.removePhoto = false;
+    draft.category = dish?.category || 'chinese';
+    draft.emoji = dish?.emoji || CATEGORY_EMOJI[draft.category] || '🍽️';
+    draft.emojiPicked = !!dish;
+    draft.spicy = Number.isFinite(dish?.spicy) ? dish.spicy : 0;
+    draft.accent = typeof dish?.accent === 'number' ? dish.accent : 0xffb347;
 
-    if (el.fldName) el.fldName.value = '';
-    if (el.fldKcal) el.fldKcal.value = '';
-    if (el.fldPrice) el.fldPrice.value = '';
-    if (el.fldDesc) el.fldDesc.value = '';
+    if (el.fldName) el.fldName.value = dish?.name || '';
+    if (el.fldKcal) el.fldKcal.value = dish ? String(dish.kcal) : '';
+    if (el.fldPrice) el.fldPrice.value = dish ? String(dish.price) : '';
+    if (el.fldDesc) el.fldDesc.value = dish?.desc || '';
     if (el.photoInput) el.photoInput.value = '';
 
     setPhotoPreview({ url: null });
     renderAddPickers();
-    addTip(supportsCamera() ? '可以直接调起相机拍一张' : '从相册或文件里选一张图');
+    renderAddMode();
 
     el.addModal.hidden = false;
+
+    if (dish?.hasPhoto) {
+      addTip('正在读取原来的照片…');
+      const url = await getPhotoUrl(dish.id);
+      // 等待期间用户可能已经关掉表单或换了另一道菜
+      if (url && !el.addModal.hidden && draft.editingId === dish.id) {
+        setPhotoPreview({ url, meta: '原照片 · 重新选一张会替换掉它' });
+        addTip('可以改信息，也可以重选一张照片替换');
+      } else if (!el.addModal.hidden && draft.editingId === dish.id) {
+        addTip('原来的照片读不出来了，保存时会给你一张占位卡');
+      }
+    } else {
+      addTip(supportsCamera() ? '可以直接调起相机拍一张' : '从相册或文件里选一张图');
+    }
+
     requestAnimationFrame(() => el.fldName?.focus({ preventScroll: true }));
   }
 
   function closeAdd() {
     if (!el.addModal) return;
     el.addModal.hidden = true;
+    draft.editingId = null;
+    draft.removePhoto = false;
     releaseDraft();
   }
 
@@ -554,6 +825,7 @@ export function createHud({ store, actions }) {
     try {
       const res = await preparePhoto(file);
       releaseDraft();
+      draft.removePhoto = false;
       draft.blob = res.blob;
       draft.previewUrl = res.previewUrl;
       draft.accent = res.accent;
@@ -583,29 +855,32 @@ export function createHud({ store, actions }) {
       return;
     }
     if (el.btnAddSave) el.btnAddSave.disabled = true;
-    addTip('正在把它摆上桌…');
+    addTip(draft.editingId ? '正在更新这道菜…' : '正在把它摆上桌…');
+    const payload = {
+      name,
+      emoji: draft.emoji,
+      category: draft.category,
+      spicy: draft.spicy,
+      kcal: el.fldKcal?.value,
+      price: el.fldPrice?.value,
+      desc: el.fldDesc?.value,
+      accent: draft.accent,
+    };
     try {
-      await actions.addDish?.(
-        {
-          name,
-          emoji: draft.emoji,
-          category: draft.category,
-          spicy: draft.spicy,
-          kcal: el.fldKcal?.value,
-          price: el.fldPrice?.value,
-          desc: el.fldDesc?.value,
-          accent: draft.accent,
-        },
-        draft.blob,
-        draft.previewUrl,
-      );
+      if (draft.editingId) {
+        await actions.updateDish?.(draft.editingId, payload, draft.blob, draft.previewUrl, {
+          removePhoto: draft.removePhoto,
+        });
+      } else {
+        await actions.addDish?.(payload, draft.blob, draft.previewUrl);
+      }
       // 所有权已经交给仓库，不要再 revoke
       draft.previewUrl = null;
       draft.blob = null;
       closeAdd();
     } catch (err) {
       console.error('[add] 保存失败', err);
-      addTip(`加菜失败：${err?.message || err}`, true);
+      addTip(`保存失败：${err?.message || err}`, true);
     } finally {
       if (el.btnAddSave) el.btnAddSave.disabled = false;
     }
@@ -665,6 +940,7 @@ export function createHud({ store, actions }) {
     renderStyles();
     renderDishList();
     renderHistory();
+    renderManage();
     if (el.btnSound) {
       el.btnSound.textContent = store.sound ? '🔊' : '🔇';
       el.btnSound.classList.toggle('on', store.sound);
@@ -815,6 +1091,7 @@ export function createHud({ store, actions }) {
       e.preventDefault();
       e.stopPropagation();
       releaseDraft();
+      draft.removePhoto = !!draft.editingId;
       setPhotoPreview({ url: null });
       addTip('去掉了照片，会给你一张带图标的占位卡');
     });
@@ -824,6 +1101,87 @@ export function createHud({ store, actions }) {
         e.preventDefault();
         saveDraft();
       }
+    });
+
+    /* ---------------- 菜品管理 / 导入导出 / 分享 ---------------- */
+
+    on(el.btnManageFromPanel, 'click', () => {
+      actions.click?.();
+      closeMobilePanels();
+      openManage();
+    });
+    on(el.btnManageClose, 'click', () => {
+      actions.click?.();
+      closeManage();
+    });
+    on(el.btnManageDone, 'click', () => {
+      actions.click?.();
+      closeManage();
+    });
+    on(el.btnManageAdd, 'click', () => {
+      actions.click?.();
+      closeManage();
+      openAdd(null);
+    });
+    on(el.btnManageImport, 'click', () => {
+      actions.click?.();
+      el.importInput?.click();
+    });
+    on(el.importInput, 'change', async (e) => {
+      const file = e.target.files?.[0];
+      // 清空 value，否则连续选同一个文件不会再触发 change
+      e.target.value = '';
+      await handleImportFile(file);
+    });
+    on(el.btnManageExport, 'click', async () => {
+      actions.click?.();
+      if (el.manageTip) {
+        el.manageTip.textContent = '正在打包…';
+        el.manageTip.classList.remove('error');
+      }
+      try {
+        await actions.exportDishes?.();
+        if (el.manageTip) el.manageTip.textContent = '导出文件已开始下载';
+      } catch (err) {
+        console.error('[export] 失败', err);
+        if (el.manageTip) {
+          el.manageTip.textContent = `导出失败：${err?.message || err}`;
+          el.manageTip.classList.add('error');
+        }
+      }
+    });
+    on(el.btnManageShare, 'click', () => {
+      actions.click?.();
+      if (el.sharePanel) el.sharePanel.hidden = false;
+      renderShareUrl();
+    });
+    on(el.shareWithPhotos, 'change', () => renderShareUrl());
+    on(el.btnShareCopy, 'click', () => copyShareUrl());
+    on(el.btnManageClear, 'click', () => {
+      actions.click?.();
+      if (!el.btnManageClear) return;
+      if (!el.btnManageClear.classList.contains('confirm')) {
+        el.btnManageClear.classList.add('confirm');
+        el.btnManageClear.textContent = '再点一次确认清空';
+        clearTimeout(clearTimer);
+        clearTimer = setTimeout(resetClearButton, 3200);
+        return;
+      }
+      resetClearButton();
+      actions.clearDishes?.();
+    });
+
+    /* ---------------- 收到分享链接 ---------------- */
+
+    on(el.btnShareAccept, 'click', () => {
+      actions.click?.();
+      closeSharePrompt();
+      actions.acceptShare?.();
+    });
+    on(el.btnShareDecline, 'click', () => {
+      actions.click?.();
+      closeSharePrompt();
+      actions.declineShare?.();
     });
 
     for (const backdrop of document.querySelectorAll('.modal-backdrop')) {
@@ -837,6 +1195,11 @@ export function createHud({ store, actions }) {
           actions.focusView?.();
         } else if (which === 'add') {
           closeAdd();
+        } else if (which === 'manage') {
+          closeManage();
+        } else if (which === 'share') {
+          closeSharePrompt();
+          actions.declineShare?.();
         }
       });
     }
@@ -862,20 +1225,25 @@ export function createHud({ store, actions }) {
           closeHelp();
           return;
         }
+        if (!el.shareModal?.hidden || !el.manageModal?.hidden) return;
         actions.spin?.();
         return;
       }
 
       if (e.key === 'Escape') {
         if (!el.addModal?.hidden) closeAdd();
-        else if (!el.helpModal?.hidden) closeHelp();
+        else if (!el.shareModal?.hidden) {
+          closeSharePrompt();
+          actions.declineShare?.();
+        } else if (!el.helpModal?.hidden) closeHelp();
+        else if (!el.manageModal?.hidden) closeManage();
         else if (!el.resultModal?.hidden) hideResult();
         else closeMobilePanels();
         return;
       }
 
-      // 加菜弹窗打开时不要抢快捷键
-      if (!el.addModal?.hidden) return;
+      // 加菜 / 管理 / 分享弹窗打开时不要抢快捷键
+      if (!el.addModal?.hidden || !el.manageModal?.hidden || !el.shareModal?.hidden) return;
 
       const k = e.key.toLowerCase();
       if (k === 'r') actions.resetView?.();
@@ -916,8 +1284,18 @@ export function createHud({ store, actions }) {
     openAdd,
     closeAdd,
     addTip,
+    openManage,
+    closeManage,
+    openSharePrompt,
+    closeSharePrompt,
     get addOpen() {
       return el.addModal ? !el.addModal.hidden : false;
+    },
+    get manageOpen() {
+      return el.manageModal ? !el.manageModal.hidden : false;
+    },
+    get shareOpen() {
+      return el.shareModal ? !el.shareModal.hidden : false;
     },
     /** 仅供测试：直接塞一张已经压好的图进表单 */
     __setDraftPhoto(blob, previewUrl, accent) {
@@ -929,7 +1307,11 @@ export function createHud({ store, actions }) {
     },
     /** 仅供测试：读取当前表单值 */
     __draft() {
-      return { ...draft, name: el.fldName?.value || '', kcal: el.fldKcal?.value || '' };
+      return {
+        ...draft,
+        name: el.fldName?.value || '',
+        kcal: el.fldKcal?.value || '',
+      };
     },
     closeMobilePanels,
     get resultDish() {

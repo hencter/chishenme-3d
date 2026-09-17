@@ -1515,6 +1515,182 @@ kbd {
   border: 1px solid rgba(157, 140, 255, 0.4);
 }
 
+/* 自定义菜品在菜单里的编辑按钮 */
+.edit-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.edit-btn:hover {
+  color: #ffe3b0;
+  background: rgba(255, 179, 71, 0.16);
+  border-color: rgba(255, 179, 71, 0.36);
+}
+
+/* ---------- 菜品管理 / 导入导出 / 分享 ---------- */
+
+.manage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.manage-head .panel-sub:last-child {
+  font-size: 10px;
+  text-align: right;
+}
+
+.manage-list {
+  display: grid;
+  gap: 6px;
+  max-height: 264px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--stroke);
+  animation: slideIn 0.3s var(--ease);
+}
+
+.manage-row .emoji {
+  font-size: 20px;
+  flex: none;
+}
+
+.manage-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.manage-name {
+  font-size: 13px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manage-sub {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+.manage-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.manage-actions .ghost-btn {
+  width: 100%;
+}
+
+.ghost-btn:disabled,
+.primary-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.ghost-btn.confirm {
+  color: #ffd9d3;
+  background: rgba(255, 90, 70, 0.16);
+  border-color: rgba(255, 90, 70, 0.4);
+}
+
+.share-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--stroke);
+  animation: slideIn 0.3s var(--ease);
+}
+
+.share-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.share-toggle input {
+  accent-color: var(--amber);
+}
+
+.share-panel textarea {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  outline: none;
+  word-break: break-all;
+}
+
+.share-panel textarea:focus {
+  border-color: var(--amber);
+}
+
+.share-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.share-foot span {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+.share-card {
+  text-align: center;
+}
+
+.share-card h2 {
+  margin: 0 0 10px;
+}
+
+.share-card .result-desc {
+  margin-bottom: 18px;
+}
+
+.share-card .sheet-tip {
+  text-align: center;
+}
+
+
 /* ---------- 响应式 ---------- */
 
 @media (max-width: 1180px) {
