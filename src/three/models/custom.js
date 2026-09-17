@@ -112,7 +112,7 @@ export function buildPhotoPlaque({ dish, texture = null }) {
   // 底边主题色发光条
   const accentBar = mesh(
     new THREE.BoxGeometry(CARD_WIDTH + 0.035, 0.012, 0.016),
-    accentGlow(accent, 1.7),
+    accentGlow(accent, 1.2),
     { y: 0.006, z: 0.008, cast: false },
   );
   accentBar.userData.noShadow = true;

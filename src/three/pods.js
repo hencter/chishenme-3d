@@ -48,11 +48,11 @@ function createPod(dish) {
     recv: true,
   });
 
-  // 发光的边缘（吃 Bloom）
+  // 发光的边缘（吃 Bloom，但别亮到把菜糊掉）
   const ringMat = new THREE.MeshBasicMaterial({
     color: accent.clone(),
     transparent: true,
-    opacity: 0.42,
+    opacity: 0.28,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     fog: false,
@@ -68,7 +68,7 @@ function createPod(dish) {
     map: glowTexture(0.3),
     color: accent.clone(),
     transparent: true,
-    opacity: 0.35,
+    opacity: 0.18,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     fog: false,
@@ -308,8 +308,8 @@ export function createPodRing({ dishes, narrow = false }) {
         if (Math.abs(pod.spin) < 1e-3) pod.spin = 0;
       }
 
-      pod.ringMat.opacity = 0.3 + pod.lift * 0.7 + pod.hover * 0.35 - pod.dim * 0.18;
-      pod.haloMat.opacity = 0.26 + pod.lift * 0.4 + pod.hover * 0.2 - pod.dim * 0.16;
+      pod.ringMat.opacity = 0.2 + pod.lift * 0.5 + pod.hover * 0.22 - pod.dim * 0.12;
+      pod.haloMat.opacity = 0.12 + pod.lift * 0.22 + pod.hover * 0.1 - pod.dim * 0.08;
       const labelBase = 1 - pod.dim * 0.62;
       pod.labelNormal.opacity = labelBase;
       pod.labelHighlight.opacity = labelBase;

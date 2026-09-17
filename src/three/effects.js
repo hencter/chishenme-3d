@@ -102,7 +102,7 @@ export function createAmbientMotes({ count = 320, inner = 2.2, outer = 6.4, heig
       pos[ix] += Math.sin(t * 0.5 + phases[i]) * dt * 0.06;
       pos[iz] += Math.cos(t * 0.42 + phases[i] * 1.3) * dt * 0.06;
       // 缓慢呼吸
-      alpha[i] = 0.12 + 0.4 * (0.5 + 0.5 * Math.sin(t * 0.9 + phases[i]));
+      alpha[i] = 0.09 + 0.26 * (0.5 + 0.5 * Math.sin(t * 0.9 + phases[i]));
     }
     geo.attributes.position.needsUpdate = true;
     geo.attributes.aAlpha.needsUpdate = true;
@@ -120,7 +120,7 @@ export function createCore() {
   root.position.set(0, 1.06, 0);
 
   // 内核
-  const inner = mesh(new THREE.OctahedronGeometry(0.2, 0), accentGlow(0xffb347, 1.25), {
+  const inner = mesh(new THREE.OctahedronGeometry(0.2, 0), accentGlow(0xffb347, 0.95), {
     cast: false,
   });
   inner.name = 'core-inner';
@@ -130,7 +130,7 @@ export function createCore() {
     color: 0xffc978,
     wireframe: true,
     transparent: true,
-    opacity: 0.32,
+    opacity: 0.22,
     depthWrite: false,
   });
   const shell = mesh(new THREE.IcosahedronGeometry(0.34, 1), shellMat, { cast: false, name: 'core-shell' });
@@ -141,7 +141,7 @@ export function createCore() {
     color: 0xff8a2e,
     blending: THREE.AdditiveBlending,
     transparent: true,
-    opacity: 0.3,
+    opacity: 0.17,
     depthWrite: false,
   });
   const glow = new THREE.Sprite(glowMat);
@@ -151,7 +151,7 @@ export function createCore() {
   const ringMat = new THREE.MeshBasicMaterial({
     color: 0xffb347,
     transparent: true,
-    opacity: 0.34,
+    opacity: 0.2,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
@@ -172,7 +172,7 @@ export function createCore() {
       map: haloTexture(),
       color: 0xff8a3a,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.24,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     }),
@@ -199,7 +199,7 @@ export function createCore() {
     inner.scale.setScalar(pulse);
     shell.scale.setScalar(1 + Math.sin(t * 1.7) * 0.04 + spinBoost * 0.2);
     glow.scale.setScalar(2.2 * (1 + Math.sin(t * 1.5) * 0.06 + spinBoost * 0.35));
-    glowMat.opacity = 0.26 + Math.sin(t * 2.1) * 0.05 + spinBoost * 0.24;
+    glowMat.opacity = 0.15 + Math.sin(t * 2.1) * 0.04 + spinBoost * 0.16;
     halo.scale.setScalar(1 + Math.sin(t * 1.3) * 0.04 + spinBoost * 0.22);
   }
 
@@ -272,7 +272,7 @@ export function createBeam() {
   function setColor(color) {
     const c = new THREE.Color(color);
     for (const m of [coneMat, shaftMat, ringMat, discMat]) m.color.copy(c);
-    shaftMat.color.lerp(new THREE.Color(0xffffff), 0.45);
+    shaftMat.color.lerp(new THREE.Color(0xffffff), 0.3);
   }
 
   function show(color, { pulse = false } = {}) {
@@ -296,10 +296,10 @@ export function createBeam() {
       return;
     }
     const breathe = 1 + Math.sin(t * 6) * 0.03 + pulseT * 0.12;
-    coneMat.opacity = level * 0.2 * breathe;
-    shaftMat.opacity = level * 0.5 * breathe;
-    ringMat.opacity = level * 0.85 * breathe;
-    discMat.opacity = level * 0.6 * breathe;
+    coneMat.opacity = level * 0.11 * breathe;
+    shaftMat.opacity = level * 0.28 * breathe;
+    ringMat.opacity = level * 0.5 * breathe;
+    discMat.opacity = level * 0.3 * breathe;
     const s = 1 + (1 - level) * 0.5;
     ring.scale.setScalar(s);
     disc.scale.setScalar(s + Math.sin(t * 2) * 0.02);
@@ -443,7 +443,7 @@ export function createBurst({ count = 130 } = {}) {
       positions[i * 3] += vel[i * 3] * dt;
       positions[i * 3 + 1] += vel[i * 3 + 1] * dt;
       positions[i * 3 + 2] += vel[i * 3 + 2] * dt;
-      alphas[i] = (1 - k) * (1 - k) * 0.95;
+      alphas[i] = (1 - k) * (1 - k) * 0.68;
     }
     geo.attributes.position.needsUpdate = true;
     geo.attributes.aAlpha.needsUpdate = true;
@@ -496,7 +496,7 @@ export function createShockRing() {
     const e = 1 - Math.pow(1 - t, 3);
     const s = 0.5 + e * 7;
     ring.scale.setScalar(s);
-    mat.opacity = (1 - t) * 0.7;
+    mat.opacity = (1 - t) * 0.4;
   }
 
   return { ring, trigger, update };

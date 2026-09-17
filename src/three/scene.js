@@ -194,8 +194,8 @@ export function createStage(canvas, { quality = 'high' } = {}) {
   const rim = new THREE.DirectionalLight(0xff9a4a, 1.05);
   rim.position.set(0, 3.2, -8.5);
 
-  // 中心暖芯，让餐桌看起来是「热」的
-  const core = new THREE.PointLight(0xff7a2e, 7.5, 16, 2);
+  // 中心暖芯，让餐桌看起来是「热」的（别太亮，否则会把盘子上的菜冲白）
+  const core = new THREE.PointLight(0xff7a2e, 5.2, 16, 2);
   core.position.set(0, 1.15, 0);
 
   const table = buildTable(renderer);
@@ -215,7 +215,7 @@ export function createStage(canvas, { quality = 'high' } = {}) {
     if (!wantsComposer()) return;
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.46, 0.72, 0.8);
+    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.32, 0.66, 0.86);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
   }
